@@ -11,9 +11,7 @@ package oauth
 // BUG(adg): doesn't support refreshing Credentials when expired.
 
 import (
-	"bytes"
 	"http"
-	"io/ioutil"
 	"json"
 	"log"
 	"os"
@@ -30,7 +28,6 @@ type Transport struct {
 	ClientId     string
 	ClientSecret string
 	Scope        string
-	UserAgent    string
 	AuthURL      string
 	TokenURL     string
 	RedirectURL  string // may be empty for out-of-band mode
@@ -69,35 +66,16 @@ func (t *Transport) AuthorizeURL() string {
 // it may be used immediately to make authenticated requests as an
 // http.RoundTripper.
 func (t *Transport) Exchange(code string) (*Credentials, os.Error) {
-	url, err := http.ParseURL(t.TokenURL)
-	if err != nil {
-		panic("TokenURL malformed: " + err.String())
+	form := map[string]string{
+		"grant_type":    "authorization_code",
+		"client_id":     t.ClientId,
+		"client_secret": t.ClientSecret,
+		"redirect_uri":  t.redirectURL(),
+		"scop":          t.Scope,
+		"code":          code,
 	}
-	body := new(bytes.Buffer)
-	body.WriteString(http.EncodeQuery(map[string][]string{
-		"grant_type":    {"authorization_code"},
-		"client_id":     {t.ClientId},
-		"client_secret": {t.ClientSecret},
-		"redirect_uri":  {t.redirectURL()},
-		"scop":          {t.Scope},
-		"code":          {code},
-	}))
-	req := &http.Request{
-		Method:        "POST",
-		URL:           url,
-		Host:          url.Host,
-		ProtoMajor:    1,
-		ProtoMinor:    1,
-		Close:         true,
-		UserAgent:     t.UserAgent,
-		Body:          ioutil.NopCloser(body),
-		ContentLength: int64(body.Len()),
-		Header: http.Header{
-			"User-Agent":   {t.UserAgent},
-			"Content-Type": {"application/x-www-form-urlencoded"},
-		},
-	}
-	resp, err := t.transport().RoundTrip(req)
+	c := &http.Client{t.transport()}
+	resp, err := c.PostForm(t.TokenURL, form)
 	if err != nil {
 		return nil, err
 	}
@@ -119,17 +97,12 @@ func (t *Transport) Exchange(code string) (*Credentials, os.Error) {
 // RoundTrip executes a single HTTP transaction using the Transport's
 // Credentials as authorization headers.
 func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Error) {
-	// Set OAuth headers
 	if t.Credentials == nil {
 		return nil, os.NewError("no Credentials supplied")
 	}
-	h := req.Header
-	h.Set("Authorization", "OAuth "+t.Credentials.AccessToken)
-	if ua := h.Get("User-Agent"); ua != "" {
-		h.Set("User-Agent", t.UserAgent+" "+ua)
-	} else {
-		h.Set("User-Agent", t.UserAgent)
-	}
+
+	// Set OAuth header
+	req.Header.Set("Authorization", "OAuth "+t.Credentials.AccessToken)
 
 	// Make the HTTP request
 	if resp, err = t.transport().RoundTrip(req); err != nil {
@@ -140,6 +113,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Er
 		// TODO(adg): Refresh credentials if we get a 401
 		log.Println("Token refresh required")
 	}
+
 	return
 }
 
