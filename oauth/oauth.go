@@ -6,18 +6,16 @@
 // OAuth2-authenticated HTTP requests.
 package oauth
 
-// TODO(adg): Documentation.
-
-// BUG(adg): doesn't support refreshing Credentials when expired.
+// TODO(adg): A means of automatically saving credentials when updated.
 
 import (
 	"http"
 	"json"
-	"log"
 	"os"
 	"time"
 )
 
+// Config is the configuration of an OAuth consumer.
 type Config struct {
 	ClientId     string
 	ClientSecret string
@@ -26,24 +24,37 @@ type Config struct {
 	TokenURL     string
 	RedirectURL  string // Defaults to out-of-band mode if empty.
 
-	// Transport is the HTTP transport to use.
+	// Transport is the HTTP transport to use when making requests.
 	// It will default to http.DefaultTransport if nil.
+	// (It should never be an oauth.Transport.)
 	Transport http.RoundTripper
 }
 
+// Credentials contain an end-user's tokens.
+// This is the data you must store to persist authentication.
 type Credentials struct {
 	AccessToken  string "access_token"
 	RefreshToken string "refresh_token"
 	TokenExpiry  int64  "expires_in"
 }
 
+// Transport implements http.RoundTripper. When configured with a valid
+// Config and Credentials it can be used to make authenticated HTTP requests.
+//
+//	t := &oauth.Transport{config, credentials}
+//	c := &http.Client{t}
+//	r, _, err := c.Get("http://example.org/url/requiring/auth")
+//	// etc
+//
+// It will automatically refresh the Credentials if it can,
+// updating the supplied Credentials in place.
 type Transport struct {
 	*Config
 	*Credentials
 }
 
 // AuthURL returns a URL that the end-user should be redirected to,
-// so that they may obtain an code (that will be provided to Exchange).
+// so that they may obtain an authorization code.
 func AuthURL(c *Config) string {
 	url, err := http.ParseURL(c.AuthURL)
 	if err != nil {
@@ -64,16 +75,13 @@ func AuthURL(c *Config) string {
 }
 
 // Exchange takes a code and gets access Credentials from the remote server.
-// If successful, the Credentials will be stored in the Transport so that
-// it may be used immediately to make authenticated requests as an
-// http.RoundTripper.
 func Exchange(c *Config, code string) (*Credentials, os.Error) {
 	form := map[string]string{
 		"grant_type":    "authorization_code",
 		"client_id":     c.ClientId,
 		"client_secret": c.ClientSecret,
 		"redirect_uri":  c.redirectURL(),
-		"scop":          c.Scope,
+		"scope":         c.Scope,
 		"code":          code,
 	}
 	resp, err := (&http.Client{c.transport()}).PostForm(c.TokenURL, form)
@@ -97,24 +105,53 @@ func Exchange(c *Config, code string) (*Credentials, os.Error) {
 // RoundTrip executes a single HTTP transaction using the Transport's
 // Credentials as authorization headers.
 func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Error) {
+	if t.Config == nil {
+		return nil, os.NewError("no Config supplied")
+	}
 	if t.Credentials == nil {
 		return nil, os.NewError("no Credentials supplied")
 	}
 
-	// Set OAuth header
-	req.Header.Set("Authorization", "OAuth "+t.AccessToken)
-
 	// Make the HTTP request
+	req.Header.Set("Authorization", "OAuth "+t.AccessToken)
 	if resp, err = t.transport().RoundTrip(req); err != nil {
 		return
 	}
 
+	// Refresh credentials if they're stale
 	if resp.StatusCode == 401 {
-		// TODO(adg): Refresh credentials if we get a 401
-		log.Println("Token refresh required")
+		if err = t.refresh(); err != nil {
+			return
+		}
+		resp, err = t.transport().RoundTrip(req)
 	}
 
 	return
+}
+
+func (t *Transport) refresh() os.Error {
+	form := map[string]string{
+		"grant_type":    "refresh_token",
+		"client_id":     t.ClientId,
+		"client_secret": t.ClientSecret,
+		"refresh_token": t.RefreshToken,
+	}
+	resp, err := (&http.Client{t.transport()}).PostForm(t.TokenURL, form)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != 200 {
+		return os.NewError("invalid response: " + resp.Status)
+	}
+	defer resp.Body.Close()
+	if err = json.NewDecoder(resp.Body).Decode(t.Credentials); err != nil {
+		return err
+	}
+	if t.TokenExpiry != 0 {
+		t.TokenExpiry = time.Seconds() + t.TokenExpiry
+	}
+	return nil
+
 }
 
 func (c *Config) transport() http.RoundTripper {
