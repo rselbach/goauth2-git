@@ -18,6 +18,19 @@ import (
 	"time"
 )
 
+type Config struct {
+	ClientId     string
+	ClientSecret string
+	Scope        string
+	AuthURL      string
+	TokenURL     string
+	RedirectURL  string // Defaults to out-of-band mode if empty.
+
+	// Transport is the HTTP transport to use.
+	// It will default to http.DefaultTransport if nil.
+	Transport http.RoundTripper
+}
+
 type Credentials struct {
 	AccessToken  string "access_token"
 	RefreshToken string "refresh_token"
@@ -25,33 +38,22 @@ type Credentials struct {
 }
 
 type Transport struct {
-	ClientId     string
-	ClientSecret string
-	Scope        string
-	AuthURL      string
-	TokenURL     string
-	RedirectURL  string // may be empty for out-of-band mode
-
-	// Credentials may be provided or nil.
-	// If provided, the AuthorizeURL and Exchange steps may be skipped.
-	Credentials *Credentials
-
-	// Transport will default to http.DefaultTransport when nil.
-	Transport http.RoundTripper
+	*Config
+	*Credentials
 }
 
-// AuthorizeURL returns a URL that the end-user should be redirected to,
+// AuthURL returns a URL that the end-user should be redirected to,
 // so that they may obtain an code (that will be provided to Exchange).
-func (t *Transport) AuthorizeURL() string {
-	url, err := http.ParseURL(t.AuthURL)
+func AuthURL(c *Config) string {
+	url, err := http.ParseURL(c.AuthURL)
 	if err != nil {
 		panic("AuthURL malformed: " + err.String())
 	}
 	q := http.EncodeQuery(map[string][]string{
 		"response_type": {"code"},
-		"client_id":     {t.ClientId},
-		"redirect_uri":  {t.redirectURL()},
-		"scope":         {t.Scope},
+		"client_id":     {c.ClientId},
+		"redirect_uri":  {c.redirectURL()},
+		"scope":         {c.Scope},
 	})
 	if url.RawQuery == "" {
 		url.RawQuery = q
@@ -65,17 +67,16 @@ func (t *Transport) AuthorizeURL() string {
 // If successful, the Credentials will be stored in the Transport so that
 // it may be used immediately to make authenticated requests as an
 // http.RoundTripper.
-func (t *Transport) Exchange(code string) (*Credentials, os.Error) {
+func Exchange(c *Config, code string) (*Credentials, os.Error) {
 	form := map[string]string{
 		"grant_type":    "authorization_code",
-		"client_id":     t.ClientId,
-		"client_secret": t.ClientSecret,
-		"redirect_uri":  t.redirectURL(),
-		"scop":          t.Scope,
+		"client_id":     c.ClientId,
+		"client_secret": c.ClientSecret,
+		"redirect_uri":  c.redirectURL(),
+		"scop":          c.Scope,
 		"code":          code,
 	}
-	c := &http.Client{t.transport()}
-	resp, err := c.PostForm(t.TokenURL, form)
+	resp, err := (&http.Client{c.transport()}).PostForm(c.TokenURL, form)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +91,6 @@ func (t *Transport) Exchange(code string) (*Credentials, os.Error) {
 	if cred.TokenExpiry != 0 {
 		cred.TokenExpiry = time.Seconds() + cred.TokenExpiry
 	}
-	t.Credentials = cred
 	return cred, nil
 }
 
@@ -102,7 +102,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Er
 	}
 
 	// Set OAuth header
-	req.Header.Set("Authorization", "OAuth "+t.Credentials.AccessToken)
+	req.Header.Set("Authorization", "OAuth "+t.AccessToken)
 
 	// Make the HTTP request
 	if resp, err = t.transport().RoundTrip(req); err != nil {
@@ -117,16 +117,16 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Er
 	return
 }
 
-func (t *Transport) transport() http.RoundTripper {
-	if t.Transport != nil {
-		return t.Transport
+func (c *Config) transport() http.RoundTripper {
+	if c.Transport != nil {
+		return c.Transport
 	}
 	return http.DefaultTransport
 }
 
-func (t *Transport) redirectURL() string {
-	if t.RedirectURL != "" {
-		return t.RedirectURL
+func (c *Config) redirectURL() string {
+	if c.RedirectURL != "" {
+		return c.RedirectURL
 	}
 	return "oob"
 }

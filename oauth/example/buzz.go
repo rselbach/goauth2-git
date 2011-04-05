@@ -39,8 +39,8 @@ func main() {
 		return
 	}
 
-	// Set up a Transport for making OAuth2-authenticated calls
-	rt := &oauth.Transport{
+	// Set up a configuration
+	config := &oauth.Config{
 		ClientId:     *clientId,
 		ClientSecret: *clientSecret,
 		Scope:        "https://www.googleapis.com/auth/buzz",
@@ -51,7 +51,7 @@ func main() {
 	// Step one, get an authorization code from the data provider.
 	// ("Please ask the user if I can access this resource.")
 	if *code == "" && *token == "" {
-		url := rt.AuthorizeURL()
+		url := oauth.AuthURL(config)
 		fmt.Println("Visit this URL to get a code, then run again with -code=YOUR_CODE")
 		fmt.Println(url)
 		return
@@ -60,31 +60,38 @@ func main() {
 	// Step two, exchange the authorization code for an access token.
 	// ("Here's the code you gave the user, now give me a token!")
 	if *token == "" {
-		cred, err := rt.Exchange(*code)
+		cred, err := oauth.Exchange(config, *code)
 		if err != nil {
 			log.Fatal(err)
 		}
 		fmt.Printf("Now run again with -token=%s\n", cred.AccessToken)
-		// We needn't return here; the Transport is actually all set
-		// up with the right credentials by this point (making the
-		// following 'rt.Credentials = ...' line redundant).
-		// The process has been split up to demonstrate how one might
-		// set up Credentials that have been stored elsewhere.
 		return
+		// We needn't return here; we could just use 'cred' instead
+		// of creating a new Credentials value below when creating
+		// the Transport.
+		// The process has been split up to demonstrate how one might
+		// restore Credentials that have been previously stored.
 	}
 
 	// Step three, make the actual request using the token to authenticate.
 	// ("Here's the token, let me in!")
-	rt.Credentials = &oauth.Credentials{
-		AccessToken: *token,
-		// If you were storing this information somewhere,
-		// you'd want to store the RefreshToken field as well.
+	// First, set up a Transport with our config and our credentials.
+	t := &oauth.Transport{
+		config,
+		&oauth.Credentials{
+			AccessToken: *token,
+			// If you were storing this information somewhere,
+			// you'd want to store the RefreshToken field as well.
+		},
 	}
-	c := &http.Client{rt}
+	// Create an http.Client that uses our Transport to make requests.
+	c := &http.Client{t}
+	// Make the request.
 	r, _, err := c.Get(activities)
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Writing the response to standard output.
 	defer r.Body.Close()
 	io.Copy(os.Stdout, r.Body)
 	fmt.Println()
