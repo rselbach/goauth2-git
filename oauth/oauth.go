@@ -55,7 +55,7 @@ type Transport struct {
 
 // AuthURL returns a URL that the end-user should be redirected to,
 // so that they may obtain an authorization code.
-func AuthURL(c *Config) string {
+func AuthURL(c *Config, state string) string {
 	url, err := http.ParseURL(c.AuthURL)
 	if err != nil {
 		panic("AuthURL malformed: " + err.String())
@@ -65,6 +65,7 @@ func AuthURL(c *Config) string {
 		"client_id":     {c.ClientId},
 		"redirect_uri":  {c.redirectURL()},
 		"scope":         {c.Scope},
+		"state":         {state},
 	})
 	if url.RawQuery == "" {
 		url.RawQuery = q

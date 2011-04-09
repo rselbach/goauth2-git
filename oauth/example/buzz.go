@@ -51,7 +51,7 @@ func main() {
 	// Step one, get an authorization code from the data provider.
 	// ("Please ask the user if I can access this resource.")
 	if *code == "" && *token == "" {
-		url := oauth.AuthURL(config)
+		url := oauth.AuthURL(config, "")
 		fmt.Println("Visit this URL to get a code, then run again with -code=YOUR_CODE")
 		fmt.Println(url)
 		return
