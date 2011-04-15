@@ -101,12 +101,10 @@ func (t *Transport) Exchange(code string) (tok *Token, err os.Error) {
 	}
 	tok = new(Token)
 	err = t.updateToken(tok, map[string]string{
-		"grant_type":    "authorization_code",
-		"client_id":     t.ClientId,
-		"client_secret": t.ClientSecret,
-		"redirect_uri":  t.redirectURL(),
-		"scope":         t.Scope,
-		"code":          code,
+		"grant_type":   "authorization_code",
+		"redirect_uri": t.redirectURL(),
+		"scope":        t.Scope,
+		"code":         code,
 	})
 	if err == nil {
 		t.Token = tok
@@ -144,13 +142,13 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Er
 func (t *Transport) refresh() os.Error {
 	return t.updateToken(t.Token, map[string]string{
 		"grant_type":    "refresh_token",
-		"client_id":     t.ClientId,
-		"client_secret": t.ClientSecret,
 		"refresh_token": t.RefreshToken,
 	})
 }
 
 func (t *Transport) updateToken(tok *Token, form map[string]string) os.Error {
+	form["client_id"] = t.ClientId
+	form["client_secret"] = t.ClientSecret
 	r, err := (&http.Client{t.transport()}).PostForm(t.TokenURL, form)
 	if err != nil {
 		return err
