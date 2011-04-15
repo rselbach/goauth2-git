@@ -23,6 +23,36 @@ type Config struct {
 	AuthURL      string
 	TokenURL     string
 	RedirectURL  string // Defaults to out-of-band mode if empty.
+}
+
+func (c *Config) redirectURL() string {
+	if c.RedirectURL != "" {
+		return c.RedirectURL
+	}
+	return "oob"
+}
+
+// Token contains an end-user's tokens.
+// This is the data you must store to persist authentication.
+type Token struct {
+	AccessToken  string "access_token"
+	RefreshToken string "refresh_token"
+	TokenExpiry  int64  "expires_in"
+}
+
+// Transport implements http.RoundTripper. When configured with a valid
+// Config and Token it can be used to make authenticated HTTP requests.
+//
+//	t := &oauth.Transport{config}
+//      t.Exchange(code)
+//      // t now contains a valid Token
+//	r, _, err := t.Client().Get("http://example.org/url/requiring/auth")
+//
+// It will automatically refresh the Token if it can,
+// updating the supplied Token in place.
+type Transport struct {
+	*Config
+	*Token
 
 	// Transport is the HTTP transport to use when making requests.
 	// It will default to http.DefaultTransport if nil.
@@ -30,32 +60,21 @@ type Config struct {
 	Transport http.RoundTripper
 }
 
-// Credentials contain an end-user's tokens.
-// This is the data you must store to persist authentication.
-type Credentials struct {
-	AccessToken  string "access_token"
-	RefreshToken string "refresh_token"
-	TokenExpiry  int64  "expires_in"
+// Client returns an *http.Client that uses Transport to make requests.
+func (t *Transport) Client() *http.Client {
+	return &http.Client{t.transport()}
 }
 
-// Transport implements http.RoundTripper. When configured with a valid
-// Config and Credentials it can be used to make authenticated HTTP requests.
-//
-//	t := &oauth.Transport{config, credentials}
-//	c := &http.Client{t}
-//	r, _, err := c.Get("http://example.org/url/requiring/auth")
-//	// etc
-//
-// It will automatically refresh the Credentials if it can,
-// updating the supplied Credentials in place.
-type Transport struct {
-	*Config
-	*Credentials
+func (t *Transport) transport() http.RoundTripper {
+	if t.Transport != nil {
+		return t.Transport
+	}
+	return http.DefaultTransport
 }
 
-// AuthURL returns a URL that the end-user should be redirected to,
+// AuthCodeURL returns a URL that the end-user should be redirected to,
 // so that they may obtain an authorization code.
-func AuthURL(c *Config, state string) string {
+func (c *Config) AuthCodeURL(state string) string {
 	url, err := http.ParseURL(c.AuthURL)
 	if err != nil {
 		panic("AuthURL malformed: " + err.String())
@@ -75,42 +94,31 @@ func AuthURL(c *Config, state string) string {
 	return url.String()
 }
 
-// Exchange takes a code and gets access Credentials from the remote server.
-func Exchange(c *Config, code string) (*Credentials, os.Error) {
-	form := map[string]string{
+// Exchange takes a code and gets access Token from the remote server.
+func (t *Transport) Exchange(code string) (tok *Token, err os.Error) {
+	tok = new(Token)
+	err = t.updateToken(tok, map[string]string{
 		"grant_type":    "authorization_code",
-		"client_id":     c.ClientId,
-		"client_secret": c.ClientSecret,
-		"redirect_uri":  c.redirectURL(),
-		"scope":         c.Scope,
+		"client_id":     t.ClientId,
+		"client_secret": t.ClientSecret,
+		"redirect_uri":  t.redirectURL(),
+		"scope":         t.Scope,
 		"code":          code,
-	}
-	resp, err := (&http.Client{c.transport()}).PostForm(c.TokenURL, form)
+	})
 	if err != nil {
-		return nil, err
+		t.Token = tok
 	}
-	if resp.StatusCode != 200 {
-		return nil, os.NewError("invalid response: " + resp.Status)
-	}
-	cred := new(Credentials)
-	defer resp.Body.Close()
-	if err = json.NewDecoder(resp.Body).Decode(cred); err != nil {
-		return nil, err
-	}
-	if cred.TokenExpiry != 0 {
-		cred.TokenExpiry = time.Seconds() + cred.TokenExpiry
-	}
-	return cred, nil
+	return
 }
 
 // RoundTrip executes a single HTTP transaction using the Transport's
-// Credentials as authorization headers.
+// Token as authorization headers.
 func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Error) {
 	if t.Config == nil {
 		return nil, os.NewError("no Config supplied")
 	}
-	if t.Credentials == nil {
-		return nil, os.NewError("no Credentials supplied")
+	if t.Token == nil {
+		return nil, os.NewError("no Token supplied")
 	}
 
 	// Make the HTTP request
@@ -119,7 +127,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Er
 		return
 	}
 
-	// Refresh credentials if they're stale
+	// Refresh credentials if they're stale and try again
 	if resp.StatusCode == 401 {
 		if err = t.refresh(); err != nil {
 			return
@@ -131,40 +139,28 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Er
 }
 
 func (t *Transport) refresh() os.Error {
-	form := map[string]string{
+	return t.updateToken(t.Token, map[string]string{
 		"grant_type":    "refresh_token",
 		"client_id":     t.ClientId,
 		"client_secret": t.ClientSecret,
 		"refresh_token": t.RefreshToken,
-	}
-	resp, err := (&http.Client{t.transport()}).PostForm(t.TokenURL, form)
+	})
+}
+
+func (t *Transport) updateToken(tok *Token, form map[string]string) os.Error {
+	r, err := t.Client().PostForm(t.TokenURL, form)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != 200 {
-		return os.NewError("invalid response: " + resp.Status)
+	defer r.Body.Close()
+	if r.StatusCode != 200 {
+		return os.NewError("invalid response: " + r.Status)
 	}
-	defer resp.Body.Close()
-	if err = json.NewDecoder(resp.Body).Decode(t.Credentials); err != nil {
+	if err = json.NewDecoder(r.Body).Decode(tok); err != nil {
 		return err
 	}
-	if t.TokenExpiry != 0 {
-		t.TokenExpiry = time.Seconds() + t.TokenExpiry
+	if tok.TokenExpiry != 0 {
+		tok.TokenExpiry = time.Seconds() + tok.TokenExpiry
 	}
 	return nil
-
-}
-
-func (c *Config) transport() http.RoundTripper {
-	if c.Transport != nil {
-		return c.Transport
-	}
-	return http.DefaultTransport
-}
-
-func (c *Config) redirectURL() string {
-	if c.RedirectURL != "" {
-		return c.RedirectURL
-	}
-	return "oob"
 }
