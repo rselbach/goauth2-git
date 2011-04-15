@@ -96,6 +96,9 @@ func (c *Config) AuthCodeURL(state string) string {
 
 // Exchange takes a code and gets access Token from the remote server.
 func (t *Transport) Exchange(code string) (tok *Token, err os.Error) {
+	if t.Config == nil {
+		return nil, os.NewError("no Config supplied")
+	}
 	tok = new(Token)
 	err = t.updateToken(tok, map[string]string{
 		"grant_type":    "authorization_code",
