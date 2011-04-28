@@ -93,7 +93,7 @@ type Transport struct {
 
 // Client returns an *http.Client that makes OAuth-authenticated requests.
 func (t *Transport) Client() *http.Client {
-	return &http.Client{t}
+	return &http.Client{Transport: t}
 }
 
 func (t *Transport) transport() http.RoundTripper {
@@ -180,7 +180,7 @@ func (t *Transport) refresh() os.Error {
 func (t *Transport) updateToken(tok *Token, form map[string]string) os.Error {
 	form["client_id"] = t.ClientId
 	form["client_secret"] = t.ClientSecret
-	r, err := (&http.Client{t.transport()}).PostForm(t.TokenURL, form)
+	r, err := (&http.Client{Transport: t.transport()}).PostForm(t.TokenURL, form)
 	if err != nil {
 		return err
 	}
