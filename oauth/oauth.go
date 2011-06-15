@@ -110,13 +110,13 @@ func (c *Config) AuthCodeURL(state string) string {
 	if err != nil {
 		panic("AuthURL malformed: " + err.String())
 	}
-	q := http.EncodeQuery(map[string][]string{
+	q := http.Values{
 		"response_type": {"code"},
 		"client_id":     {c.ClientId},
 		"redirect_uri":  {c.redirectURL()},
 		"scope":         {c.Scope},
 		"state":         {state},
-	})
+	}.Encode()
 	if url.RawQuery == "" {
 		url.RawQuery = q
 	} else {
@@ -131,11 +131,11 @@ func (t *Transport) Exchange(code string) (tok *Token, err os.Error) {
 		return nil, os.NewError("no Config supplied")
 	}
 	tok = new(Token)
-	err = t.updateToken(tok, map[string]string{
-		"grant_type":   "authorization_code",
-		"redirect_uri": t.redirectURL(),
-		"scope":        t.Scope,
-		"code":         code,
+	err = t.updateToken(tok, http.Values{
+		"grant_type":   {"authorization_code"},
+		"redirect_uri": {t.redirectURL()},
+		"scope":        {t.Scope},
+		"code":         {code},
 	})
 	if err == nil {
 		t.Token = tok
@@ -171,16 +171,16 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Er
 }
 
 func (t *Transport) refresh() os.Error {
-	return t.updateToken(t.Token, map[string]string{
-		"grant_type":    "refresh_token",
-		"refresh_token": t.RefreshToken,
+	return t.updateToken(t.Token, http.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {t.RefreshToken},
 	})
 }
 
-func (t *Transport) updateToken(tok *Token, form map[string]string) os.Error {
-	form["client_id"] = t.ClientId
-	form["client_secret"] = t.ClientSecret
-	r, err := (&http.Client{Transport: t.transport()}).PostForm(t.TokenURL, form)
+func (t *Transport) updateToken(tok *Token, v http.Values) os.Error {
+	v.Set("client_id", t.ClientId)
+	v.Set("client_secret", t.ClientSecret)
+	r, err := (&http.Client{Transport: t.transport()}).PostForm(t.TokenURL, v)
 	if err != nil {
 		return err
 	}
