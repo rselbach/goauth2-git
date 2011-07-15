@@ -66,9 +66,9 @@ func (c *Config) redirectURL() string {
 // Token contains an end-user's tokens.
 // This is the data you must store to persist authentication.
 type Token struct {
-	AccessToken  string "access_token"
-	RefreshToken string "refresh_token"
-	TokenExpiry  int64  "expires_in"
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenExpiry  int64  `json:"expires_in"`
 }
 
 // Transport implements http.RoundTripper. When configured with a valid
