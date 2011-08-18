@@ -84,7 +84,7 @@ func main() {
 		// you'd want to store the RefreshToken field as well.
 	}
 	// Make the request.
-	r, _, err := t.Client().Get(activities)
+	r, err := t.Client().Get(activities)
 	if err != nil {
 		log.Fatal(err)
 	}
