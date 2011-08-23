@@ -69,7 +69,19 @@ func (c *Config) redirectURL() string {
 type Token struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
-	TokenExpiry  int64  `json:"expires_in"`
+
+	// TokenExpiry is a unix timestamp in seconds that indicates when the
+	// token will expire. Zero means the token has no (known) expiry time.
+	// (Note: this is not the expires_in field as per the spec,
+	// even though we unmarshal the JSON expires_in value into this field.)
+	TokenExpiry int64 `json:"expires_in"`
+}
+
+func (t *Token) Expired() bool {
+	if t.TokenExpiry == 0 {
+		return false
+	}
+	return t.TokenExpiry <= time.Seconds()
 }
 
 // Transport implements http.RoundTripper. When configured with a valid
@@ -146,7 +158,13 @@ func (t *Transport) Exchange(code string) (tok *Token, err os.Error) {
 
 // RoundTrip executes a single HTTP transaction using the Transport's
 // Token as authorization headers.
-func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Error) {
+//
+// This method will attempt to renew the Token if it has expired and may return
+// an error related to that Token renewal before attempting the client request.
+// If the Token cannot be renewed a non-nil os.Error value will be returned.
+// If the Token is invalid callers should expect HTTP-level errors,
+// as indicated by the Response's StatusCode.
+func (t *Transport) RoundTrip(req *http.Request) (*http.Response, os.Error) {
 	if t.Config == nil {
 		return nil, os.NewError("no Config supplied")
 	}
@@ -154,28 +172,20 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err os.Er
 		return nil, os.NewError("no Token supplied")
 	}
 
-	// Make the HTTP request
-	req.Header.Set("Authorization", "OAuth "+t.AccessToken)
-	if resp, err = t.transport().RoundTrip(req); err != nil {
-		return
-	}
-
-	// Refresh credentials if they're stale and try again
-	if resp.StatusCode == 401 {
-		if err = t.refresh(); err != nil {
-			return
+	// Refresh the Token if it has expired.
+	if t.Expired() {
+		err := t.updateToken(t.Token, url.Values{
+			"grant_type":    {"refresh_token"},
+			"refresh_token": {t.RefreshToken},
+		})
+		if err != nil {
+			return nil, err
 		}
-		resp, err = t.transport().RoundTrip(req)
 	}
 
-	return
-}
-
-func (t *Transport) refresh() os.Error {
-	return t.updateToken(t.Token, url.Values{
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {t.RefreshToken},
-	})
+	// Make the HTTP request.
+	req.Header.Set("Authorization", "OAuth "+t.AccessToken)
+	return t.transport().RoundTrip(req)
 }
 
 func (t *Transport) updateToken(tok *Token, v url.Values) os.Error {
