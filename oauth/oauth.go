@@ -174,11 +174,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, os.Error) {
 
 	// Refresh the Token if it has expired.
 	if t.Expired() {
-		err := t.updateToken(t.Token, url.Values{
-			"grant_type":    {"refresh_token"},
-			"refresh_token": {t.RefreshToken},
-		})
-		if err != nil {
+		if err := t.Refresh(); err != nil {
 			return nil, err
 		}
 	}
@@ -186,6 +182,20 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, os.Error) {
 	// Make the HTTP request.
 	req.Header.Set("Authorization", "OAuth "+t.AccessToken)
 	return t.transport().RoundTrip(req)
+}
+
+// Refresh renews the Transport's AccessToken using its RefreshToken.
+func (t *Transport) Refresh() os.Error {
+	if t.Config == nil {
+		return os.NewError("no Config supplied")
+	} else if t.Token == nil {
+		return os.NewError("no exisiting Token")
+	}
+
+	return t.updateToken(t.Token, url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {t.RefreshToken},
+	})
 }
 
 func (t *Transport) updateToken(tok *Token, v url.Values) os.Error {
